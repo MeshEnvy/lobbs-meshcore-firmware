@@ -1,0 +1,6 @@
+; Copy to platformio.local.ini (gitignored) for local plugin dev.
+; Loaded last via platformio.ini extra_configs.
+
+[lobbs_plugin]
+lib_deps =
+  lobbs=symlink://../lobbs

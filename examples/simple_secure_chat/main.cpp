@@ -3,6 +3,10 @@
 
 #if defined(NRF52_PLATFORM)
   #include <InternalFileSystem.h>
+  #if defined(EXTRAFS) && !defined(QSPIFLASH)
+    #include <CustomLFS.h>
+    CustomLFS ExtraFS(0xD4000, 0x19000, 128);
+  #endif
 #elif defined(RP2040_PLATFORM)
   #include <LittleFS.h>
 #elif defined(ESP32)
@@ -41,6 +45,8 @@
 #endif
 
 #include <helpers/BaseChatMesh.h>
+#include <core/LoBBSKernel.h>
+#include <platforms/meshcore/LoPlatformMeshcore.h>
 
 #define SEND_TIMEOUT_BASE_MILLIS          500
 #define FLOOD_SEND_TIMEOUT_FACTOR         16.0f
@@ -232,6 +238,9 @@ protected:
   }
 
   void onMessageRecv(const ContactInfo& from, mesh::Packet* pkt, uint32_t sender_timestamp, const char *text) override {
+    if (lobbsMeshCoreHandleDm(&lobbs_core_, &from, text))
+      return;
+
     Serial.printf("(%s) MSG -> from %s\n", pkt->isRouteDirect() ? "DIRECT" : "FLOOD", from.name);
     Serial.printf("   %s\n", text);
 
@@ -274,6 +283,8 @@ protected:
   void onSendTimeout() override {
     Serial.println("   ERROR: timed out, no ACK.");
   }
+
+  LoBBSKernel lobbs_core_;
 
 public:
   MyMesh(mesh::Radio& radio, StdRNG& rng, mesh::RTCClock& rtc, SimpleMeshTables& tables)
@@ -338,6 +349,16 @@ public:
 
     loadContacts();
     _public = addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
+
+#if defined(NRF52_PLATFORM)
+    lobbsMeshCoreInit(&lobbs_core_, *this, *_fs, self_id.pub_key, *getRTCClock());
+#elif defined(RP2040_PLATFORM)
+    lobbsMeshCoreInit(&lobbs_core_, *this, LittleFS, self_id.pub_key, *getRTCClock());
+#elif defined(ESP32)
+    lobbsMeshCoreInit(&lobbs_core_, *this, SPIFFS, self_id.pub_key, *getRTCClock());
+#else
+    lobbsMeshCoreInit(&lobbs_core_, *this, *_fs, self_id.pub_key, *getRTCClock());
+#endif
   }
 
   void savePrefs() {
@@ -541,9 +562,12 @@ public:
     if (len > 0 && command[len - 1] == '\r') {  // received complete line
       command[len - 1] = 0;  // replace newline with C string null terminator
 
-      handleCommand(command);
+      if (!lobbsMeshCoreHandleSerialLine(&lobbs_core_, command))
+        handleCommand(command);
       command[0] = 0;  // reset command buffer
     }
+
+    lobbsMeshCoreLoop(&lobbs_core_);
   }
 };
 
@@ -570,6 +594,9 @@ void setup() {
 
 #if defined(NRF52_PLATFORM)
   InternalFS.begin();
+  #if defined(EXTRAFS) && !defined(QSPIFLASH)
+    ExtraFS.begin();
+  #endif
   the_mesh.begin(InternalFS);
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
